@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use ggez::*;
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
-use std::io::{self, BufReader, BufRead};
+use std::io::{BufReader, BufRead};
 
 // Doing a ECS organization
 
@@ -33,7 +33,7 @@ struct CDynamic {
 // Used for predictions on movement
 struct CPredictable {
     objid: IdVal,
-    pts: Vec<[f64; 2]>,
+    pts: Vec<[f32; 2]>,
     tstep: f64,
 }
 
@@ -48,6 +48,7 @@ enum DrawThing {
 
 struct CDrawable {
     thing: DrawThing,
+    hideable: bool,
 }
 
 impl CDrawable {
@@ -230,37 +231,52 @@ impl State {
         self.add_star(ctx, -20.0, 0.0, 10.0);
         self.add_star(ctx, 20.0, 0.0, 10.0);
 
-        let shipid = self.add_ship(ctx, MeshNum::AngMesh, 0.0, 10.0);
+        let shipid = self.add_ship(ctx, MeshNum::AngMesh, 15.0, 40.0);
         //TODO add player control
 
         // add prediction on the player ship
-        //TODO move this
+        self.add_prediction(ctx, shipid, true);
+        
+    }
+
+    fn add_prediction(&mut self, ctx: &mut Context, objid: IdVal, drawable: bool) -> IdVal {
         let p_id = self.add_entity();
+
+        let mut ptsvec = Vec::new();
+        //Add points
+        for i in 0..100 {
+            ptsvec.push([0.0,0.0]);
+        }
         self.c_predictable.insert(
             p_id,
             CPredictable{
-                objid: shipid,
-                pts: Vec::new(),
+                objid,
+                pts: ptsvec,
                 tstep: 0.1,
             },
         );
-        self.c_drawable.insert(
-            p_id,
-            CDrawable{
-                thing: DrawThing::Mesh( //TODO is there a better way? Use heap?
-                    graphics::Mesh::new_rectangle(
-                        ctx,
-                        graphics::DrawMode::fill(),
-                        graphics::Rect{x: -0.0, y: -0.0, w: 0.0, h: 0.0},
-                        graphics::BLACK,
-                    ).unwrap(),
-                ),
-            },
-        );
+        if drawable {
+            self.c_drawable.insert(
+                p_id,
+                CDrawable{
+                    thing: DrawThing::Mesh( //TODO is there a better way to allocate space? Use heap?
+                        graphics::Mesh::new_rectangle(
+                            ctx,
+                            graphics::DrawMode::fill(),
+                            graphics::Rect{x: -0.0, y: -0.0, w: 0.0, h: 0.0},
+                            graphics::BLACK,
+                        ).unwrap(),
+                    ),
+                    hideable: false,
+                },
+            );
+        }
         self.c_pos.insert(
             p_id,
             CPos{x: 0.0, y: 0.0, a: 0.0},
         );
+
+        return p_id;
     }
 
     fn add_star(&mut self, ctx: &mut Context, x: f64, y: f64, size: f64) -> IdVal {
@@ -287,6 +303,7 @@ impl State {
                         graphics::WHITE,
                     ).unwrap()
                 ),
+                hideable: true,
             },
         );
 
@@ -304,6 +321,7 @@ impl State {
             id,
             CDrawable{
                 thing: DrawThing::MeshInd(m as usize),
+                hideable: true,
             },
         );
         self.c_dynamic.insert(
@@ -322,18 +340,42 @@ impl State {
     fn s_predict(&mut self, ctx: &mut Context) {
         // for each dyn object for each gravity object in range
         for (id, p) in &mut self.c_predictable {
-            //TODO
+            // TODO different rates for different items
 
-            // if we have an assoicated CDrawable, update the mesh
+            let obj = self.c_dynamic.get(&p.objid).expect("Predictables.objid must have dynamic");
+            let objp = self.c_pos.get(&p.objid).expect("Predictables.objid must have pos");
+
+            let mut off = p.tstep;
+            let mut fx = objp.x;
+            let mut fy = objp.y;
+            let mut fvx = obj.x_vel;
+            let mut fvy = obj.y_vel;
+            for pt in &mut p.pts {
+                //fill out the points
+
+                let (ax, ay) = State::get_grav_a(&self.c_grav, &self.c_pos, fx, fy, id);
+
+                // apply the accel to the velocity
+                fvx += ax * p.tstep;
+                fvy += ay * p.tstep;
+
+                // apply the velocity to the position
+                fx += fvx * p.tstep;
+                fy += fvy * p.tstep;
+
+                *pt = [fx as f32, fy as f32];
+
+                off += p.tstep;
+            }
+
+            // if we have an assoicated CDrawable, update the mesh based on the points
             if let Some(d) = self.c_drawable.get_mut(&id) {
                 if let DrawThing::Mesh(ref mut m) = d.thing {
                     //TODO update the mesh with the points
-                    *m = graphics::Mesh::new_circle(
+                    *m = graphics::Mesh::new_line(
                         ctx,
-                        graphics::DrawMode::fill(),
-                        [0.0, 0.0],
-                        10.0,
-                        20.0,
+                        &p.pts,
+                        0.1,
                         graphics::WHITE,
                     ).unwrap();
                 }
@@ -341,42 +383,49 @@ impl State {
         }
     }
 
+    fn get_grav_a(gravs: &HashMap<IdVal, CGrav>, pos: &HashMap<IdVal, CPos>, px: f64, py: f64, id: &IdVal) -> (f64, f64) {
+        let mut ax: f64 = 0.0;
+        let mut ay: f64 = 0.0;
+
+        //NOTE Gravity pulling entities should be staticly positioned?
+        // Otherwise prediction is way off
+        for (gid, g) in gravs {
+            if *gid == *id {
+                continue;
+            }
+
+            let gp = &pos[gid];
+
+            let dx = gp.x - px;
+            let dy = gp.y - py;
+
+            if dx == 0.0 && dy == 0.0 {
+                continue;
+            }
+
+            let r2 = (dx * dx) + (dy * dy);
+            if r2 > g.dist2 {
+                continue;
+            }
+
+            let r = r2.sqrt();
+            let r3 = r2 * r;
+
+            // get accelaration due to this item
+            let ga = g.mass / r3;
+            ax += ga * dx;
+            ay += ga * dy;
+        }
+
+        return (ax, ay);
+    }
+
     fn s_move(&mut self, _ctx: &mut Context, dt: f64) {
         // for each dyn object for each gravity object in range
         for (id, d) in &mut self.c_dynamic {
             let p = &self.c_pos[id];
 
-            let mut ax: f64 = 0.0;
-            let mut ay: f64 = 0.0;
-
-            for (gid, g) in &self.c_grav {
-                if gid == id {
-                    continue;
-                }
-
-                let gp = &self.c_pos[gid];
-
-                let dx = gp.x - p.x;
-                let dy = gp.y - p.y;
-
-                if dx == 0.0 && dy == 0.0 {
-                    continue;
-                }
-
-                let r2 = (dx * dx) + (dy * dy);
-                if r2 > g.dist2 {
-                    continue;
-                }
-
-                let r = r2.sqrt();
-                let r3 = r2 * r;
-
-                // get accelaration due to this item
-                let ga = g.mass / r3;
-                ax += ga * dx;
-                ay += ga * dy;
-            }
-            
+            let (ax, ay) = State::get_grav_a(&self.c_grav, &self.c_pos, p.x, p.y, id);
 
             // apply the accel to the velocity
             d.x_vel += ax * dt;
@@ -454,7 +503,7 @@ impl ggez::event::EventHandler for State {
             let p = &self.c_pos.get(id).expect("Drawables must have a position");
 
             //don't draw objects off screen
-            if !self.cam.is_visible(ctx, &sc, p.x, p.y) {
+            if d.hideable && !self.cam.is_visible(ctx, &sc, p.x, p.y) {
                 continue;
             }
                         
