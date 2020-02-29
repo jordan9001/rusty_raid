@@ -30,6 +30,13 @@ struct CDynamic {
     a_vel: f32,
 }
 
+// Used for predictions on movement
+struct CPredictable {
+    objid: IdVal,
+    pts: Vec<[f64; 2]>,
+    tstep: f64,
+}
+
 struct CCollidable {
     rad: f64,
 }
@@ -45,14 +52,14 @@ struct CDrawable {
 
 impl CDrawable {
     fn draw(&self, st: &State, ctx: &mut Context, param: graphics::DrawParam) -> error::GameResult {
-        return graphics::draw(
-            ctx,
-            match self.thing {
-                DrawThing::Mesh(ref m) => m,
-                DrawThing::MeshInd(i) => &st.meshs[i],
+        match self.thing {
+            DrawThing::Mesh(ref m) => {
+                return graphics::draw(ctx, m, param);
             },
-            param,
-        );
+            DrawThing::MeshInd(i) => {
+                return graphics::draw(ctx, &st.meshs[i], param);
+            },
+        }
     }
 }
 
@@ -104,7 +111,8 @@ impl Camera {
 
         graphics::push_transform(ctx, Some(scrn.to_matrix()));
 
-        //TODO figureout how to apply roataion?
+        //TODO figure out how to apply roataion? Do it to the matrix?
+        // pushing another transform doesn't seem to work?
 
         graphics::apply_transformations(ctx).unwrap();
         self.update = false;
@@ -147,6 +155,7 @@ struct State {
     c_dynamic: HashMap<IdVal, CDynamic>,
     c_collidable: HashMap<IdVal, CCollidable>,
     c_drawable: HashMap<IdVal, CDrawable>,
+    c_predictable: HashMap<IdVal, CPredictable>,
 
     input: InputState,
 
@@ -184,6 +193,7 @@ impl State {
             c_dynamic: HashMap::new(),
             c_collidable: HashMap::new(),
             c_drawable: HashMap::new(),
+            c_predictable: HashMap::new(),
 
             input: InputState{
                 up: false,
@@ -220,8 +230,37 @@ impl State {
         self.add_star(ctx, -20.0, 0.0, 10.0);
         self.add_star(ctx, 20.0, 0.0, 10.0);
 
-        self.add_ship(ctx, MeshNum::AngMesh, 0.0, 10.0);
+        let shipid = self.add_ship(ctx, MeshNum::AngMesh, 0.0, 10.0);
         //TODO add player control
+
+        // add prediction on the player ship
+        //TODO move this
+        let p_id = self.add_entity();
+        self.c_predictable.insert(
+            p_id,
+            CPredictable{
+                objid: shipid,
+                pts: Vec::new(),
+                tstep: 0.1,
+            },
+        );
+        self.c_drawable.insert(
+            p_id,
+            CDrawable{
+                thing: DrawThing::Mesh( //TODO is there a better way? Use heap?
+                    graphics::Mesh::new_rectangle(
+                        ctx,
+                        graphics::DrawMode::fill(),
+                        graphics::Rect{x: -0.0, y: -0.0, w: 0.0, h: 0.0},
+                        graphics::BLACK,
+                    ).unwrap(),
+                ),
+            },
+        );
+        self.c_pos.insert(
+            p_id,
+            CPos{x: 0.0, y: 0.0, a: 0.0},
+        );
     }
 
     fn add_star(&mut self, ctx: &mut Context, x: f64, y: f64, size: f64) -> IdVal {
@@ -278,6 +317,28 @@ impl State {
         );
 
         return id;
+    }
+
+    fn s_predict(&mut self, ctx: &mut Context) {
+        // for each dyn object for each gravity object in range
+        for (id, p) in &mut self.c_predictable {
+            //TODO
+
+            // if we have an assoicated CDrawable, update the mesh
+            if let Some(d) = self.c_drawable.get_mut(&id) {
+                if let DrawThing::Mesh(ref mut m) = d.thing {
+                    //TODO update the mesh with the points
+                    *m = graphics::Mesh::new_circle(
+                        ctx,
+                        graphics::DrawMode::fill(),
+                        [0.0, 0.0],
+                        10.0,
+                        20.0,
+                        graphics::WHITE,
+                    ).unwrap();
+                }
+            }
+        }
     }
 
     fn s_move(&mut self, _ctx: &mut Context, dt: f64) {
@@ -350,6 +411,7 @@ impl ggez::event::EventHandler for State {
         }
 
         self.s_move(ctx, dt);
+        self.s_predict(ctx);
 
         //DEBUG move view
         let k = 15.0 * dt;
@@ -389,7 +451,7 @@ impl ggez::event::EventHandler for State {
         graphics::clear(ctx, graphics::BLACK);
 
         for (id, d) in &self.c_drawable {
-            let p = &self.c_pos[id];
+            let p = &self.c_pos.get(id).expect("Drawables must have a position");
 
             //don't draw objects off screen
             if !self.cam.is_visible(ctx, &sc, p.x, p.y) {
