@@ -6,16 +6,29 @@ use std::io::{BufReader, BufRead};
 
 // constants
 
-const GAME_NAME: &str = "Falling Up";
+const GAME_NAME: &str = "Falling Carefully";
 const STAR_GRAV_MUL: f64 = 1.5;
-const SHIP_SCALE: f32 = 10.0;
+const STAR_RES: f32 = 30.0;
+const SHIP_SCALE: f32 = 15.0;
+const SHIP_TRAIL_RATE: f64 = 1.0;
+const SHIP_TRAIL_SZ: f32 = 5.0;
+const SHIP_TRAIL_AMT: usize = 150;
+const PRED_RATE: f64 = 0.0;
+const PRED_TSTEP: f64 = 0.45;
+const PRED_AMT: usize = 45;
 const POWERUP_SCALE: f32 = 100.0;
-const SHIP_MINSZ: f32 = 1.32;
-const GRAV_REACH: f64 = 1.0 / 30000.0;
+const SHIP_MINSZ: f32 = 1.0;    // minimun scale factor it will get to
+const GRAV_REACH: f64 = 0.45;    // minimum pull before out of range
 const MAX_CAM_SCALE: f32 = 90.0;
-const MIN_CAM_SCALE: f32 = 0.36;
+const MIN_CAM_SCALE: f32 = 0.24;
 const ZOOM_AMT: f32 = 0.06;
 const LOG_TICKS: usize = 81;
+const PLAYER_THRUST: f64 = 42.0;
+const PLAYER_FUEL: f64 = 600.0;
+const PLAYER_EMPTY_THRUST: f64 = 9.0;
+const PLAYER_AMMO: usize = 3;
+const TURRET_PUSHBACK: f64 = 90.0;
+const TRAIL_COLOR: f32 = 0.45;
 
 type IdVal = usize;
 
@@ -43,6 +56,14 @@ struct CDynamic {
     in_ay: f64,
 }
 
+struct CTrail {
+    objid: IdVal,
+    pts: Vec<[f32; 2]>, // x, y, thrust
+    max_len: usize,
+    size: f32, // width of the trail
+    color: f32,
+}
+
 // Used for predictions on movement
 struct CPredictable {
     objid: IdVal,
@@ -50,7 +71,6 @@ struct CPredictable {
     tstep: f64,
     rate: f64,
     till_next: f64,
-    max_dist2: f64,
     valid_len: usize,
     collidable: bool,
 }
@@ -67,6 +87,7 @@ struct CCollidable {
 }
 
 enum DrawThing {
+    Blank,
     Mesh(graphics::Mesh),
     MeshInd(usize),
 }
@@ -84,6 +105,7 @@ impl CDrawable {
             param = param.scale([s, s]);
         }
         match self.thing {
+            DrawThing::Blank => return Ok(()),
             DrawThing::Mesh(ref m) => {
                 return graphics::draw(ctx, m, param);
             },
@@ -97,7 +119,9 @@ impl CDrawable {
 
 struct CShip {
     thrust: f64, // fake thrust actually, pure accelaration, no mass
+    empty_thrust: f64, // small amount of thrust when no fuel is available
     fuel: f64,
+    ammo: usize,
 }
 
 struct InputState {
@@ -107,6 +131,8 @@ struct InputState {
     left: bool,
     cw: bool,
     ccw: bool,
+    reset: bool,
+
     mx: f32,
     my: f32,
     lmb: bool,
@@ -192,14 +218,15 @@ enum MeshNum {
     BangVMesh,
     CapMesh,
     HashMesh,
+    NukeMesh,
 }
 
 struct State {
+    //shaders: Vec<graphics::Shader>,
     meshs: Vec<(graphics::Mesh, f32)>,
     rng: SmallRng,
-
     cam: Camera,
-
+    level: usize,
     next_id: IdVal,
     entities: Vec<Entity>,
     c_pos: HashMap<IdVal, CPos>,
@@ -207,6 +234,7 @@ struct State {
     c_dynamic: HashMap<IdVal, CDynamic>,
     c_collidable: HashMap<IdVal, CCollidable>,
     c_drawable: HashMap<IdVal, CDrawable>,
+    c_trail: HashMap<IdVal, CTrail>,
     c_predictable: HashMap<IdVal, CPredictable>,
     c_ship: HashMap<IdVal, CShip>,
 
@@ -217,6 +245,7 @@ struct State {
 
     //DEBUG
     log_time: usize,
+    grav_count: usize,
 }
 
 impl State {
@@ -229,6 +258,7 @@ impl State {
                     ("\\bangv.obj", SHIP_SCALE),
                     ("\\capital.obj", SHIP_SCALE),
                     ("\\pnd.obj", POWERUP_SCALE),
+                    ("\\nuke.obj", SHIP_SCALE),
                 ].iter().map(
                 |x| load_mesh(ctx, x.0, x.1)
             ).collect(),
@@ -241,15 +271,13 @@ impl State {
                 update: true,
             },
 
-            next_id: 1,
-            entities: Vec::new(),
-            c_pos: HashMap::new(),
-            c_grav: HashMap::new(),
-            c_dynamic: HashMap::new(),
-            c_collidable: HashMap::new(),
-            c_drawable: HashMap::new(),
-            c_predictable: HashMap::new(),
-            c_ship: HashMap::new(),
+            level: 1,
+
+            font: graphics::Font::new(ctx, "\\NovaMono-Regular.ttf").unwrap(),
+
+            //DEBUG
+            log_time: 0,
+            grav_count: 0,
 
             input: InputState{
                 up: false,
@@ -258,34 +286,59 @@ impl State {
                 right: false,
                 cw: false,
                 ccw: false,
+                reset: false,
                 mx: 0.0,
                 my: 0.0,
                 lmb: false,
                 rmb: false,
             },
+
+            // items that change between levels /etc
+            next_id: 1,
+            entities: Vec::new(),
+            c_pos: HashMap::new(),
+            c_grav: HashMap::new(),
+            c_dynamic: HashMap::new(),
+            c_collidable: HashMap::new(),
+            c_drawable: HashMap::new(),
+            c_trail: HashMap::new(),
+            c_predictable: HashMap::new(),
+            c_ship: HashMap::new(),
             playerid: None,
 
-            font: graphics::Font::new(ctx, "\\NovaMono-Regular.ttf").unwrap(),
-
-            //DEBUG
-            log_time: 0,
         };
 
         Ok(s)
     }
 
+    fn reset(&mut self) {
+        self.entities.clear();
+        self.c_pos.clear();
+        self.c_grav.clear();
+        self.c_dynamic.clear();
+        self.c_collidable.clear();
+        self.c_drawable.clear();
+        self.c_trail.clear();
+        self.c_predictable.clear();
+        self.c_ship.clear();
+        self.playerid = None;
+    }
+
     fn gen_level(&mut self, ctx: &mut Context) {
+        self.reset();
         //TODO make this good
+        //need portal, key, turrets, boosters
 
         // add stars
+        let num_big = self.rng.gen_range(1, 6);
         let mut i = 0;
-        'star_loop: while i < 300 {
+        'star_loop_large: while i < num_big {
             let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
-            let d = self.rng.gen_range(900.0, 3300.0);
+            let d = self.rng.gen_range(0.0, 3000.0);
 
             let x = d * a.cos();
             let y = d * a.sin();
-            let s = self.rng.gen_range(9.0, 90.0);
+            let s = self.rng.gen_range(300.0, 360.0 + (300.0 / (num_big as f64)));
 
             for (cid, c) in &self.c_collidable {
                 let colpos = &self.c_pos.get(cid).unwrap();
@@ -295,7 +348,7 @@ impl State {
 
                 if (c.rad2 + (s*s)) > ((dx * dx) + (dy * dy)) {
                     // would overlap
-                    continue 'star_loop;
+                    continue 'star_loop_large;
                 }
             }
 
@@ -303,19 +356,52 @@ impl State {
                 ctx,
                 x, y,
                 s,
+                true,
+            );
+
+            i += 1;
+        }
+
+        let num_small = self.rng.gen_range(45, 270);
+        let mut i = 0;
+        'star_loop_small: while i < num_small {
+            let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
+            let d = self.rng.gen_range(900.0, 6000.0);
+
+            let x = d * a.cos();
+            let y = d * a.sin();
+            let s = self.rng.gen_range(45.0, 90.0);
+
+            for (cid, c) in &self.c_collidable {
+                let colpos = &self.c_pos.get(cid).unwrap();
+                
+                let dx = colpos.x - x;
+                let dy = colpos.y - y;
+
+                if (c.rad2 + (s*s)) > ((dx * dx) + (dy * dy)) {
+                    // would overlap
+                    continue 'star_loop_small;
+                }
+            }
+
+            self.add_star(
+                ctx,
+                x, y,
+                s,
+                false,
             );
 
             i += 1;
         }
 
         let mut i = 0;
-        'fuel_loop: while i < 30 {
+        let fuel_amt = 90 / self.level;
+        'fuel_loop: while i < fuel_amt {
             let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
-            let d = self.rng.gen_range(0.0, 2400.0);
+            let d = self.rng.gen_range(450.0, 4500.0);
 
             let x = d * a.cos();
             let y = d * a.sin();
-            let s = self.rng.gen_range(9.0, 90.0);
 
             for (cid, c) in &self.c_collidable {
                 let colpos = &self.c_pos.get(cid).unwrap();
@@ -337,7 +423,13 @@ impl State {
             i += 1;
         }
 
-        let shipid = self.add_ship(ctx, MeshNum::AngMesh, 3300.0, 1500.0, 30.0, 300.0);
+        let shipid = self.add_ship(
+            ctx,
+            MeshNum::AngMesh,
+            -6000.0, -1500.0,
+            PLAYER_THRUST, PLAYER_EMPTY_THRUST, PLAYER_FUEL,
+            PLAYER_AMMO,
+        );
         self.make_player(shipid);
 
         // add prediction on the player ship
@@ -363,7 +455,7 @@ impl State {
         return id;
     }
 
-    fn add_fuel_powerup(&mut self, ctx: &mut Context, x: f64, y: f64) -> IdVal {
+    fn add_fuel_powerup(&mut self, _ctx: &mut Context, x: f64, y: f64) -> IdVal {
         let id = self.add_entity();
 
         let i = MeshNum::AstMesh as usize;
@@ -398,7 +490,7 @@ impl State {
 
         let mut ptsvec = Vec::new();
         //Add points
-        for _ in 0..100 {
+        for _ in 0..PRED_AMT {
             ptsvec.push([0.0,0.0]);
         }
         self.c_predictable.insert(
@@ -406,10 +498,9 @@ impl State {
             CPredictable{
                 objid,
                 pts: ptsvec,
-                tstep: 0.21,
-                rate: 0.0,
+                tstep: PRED_TSTEP,
+                rate: PRED_RATE,
                 till_next: 0.0,
-                max_dist2: 3000000.0,
                 valid_len: 0,
                 collidable: true,
             },
@@ -418,14 +509,7 @@ impl State {
             self.c_drawable.insert(
                 p_id,
                 CDrawable{
-                    thing: DrawThing::Mesh( //TODO is there a better way to allocate space? Use heap?
-                        graphics::Mesh::new_rectangle(
-                            ctx,
-                            graphics::DrawMode::fill(),
-                            graphics::Rect{x: -0.0, y: -0.0, w: 0.0, h: 0.0},
-                            graphics::BLACK,
-                        ).unwrap(),
-                    ),
+                    thing: DrawThing::Blank,
                     r: std::f32::INFINITY,
                     minsz: 0.0, // we do this in the mesh gen
                 },
@@ -439,7 +523,7 @@ impl State {
         return p_id;
     }
 
-    fn add_star(&mut self, ctx: &mut Context, x: f64, y: f64, size: f64) -> IdVal {
+    fn add_star(&mut self, ctx: &mut Context, x: f64, y: f64, size: f64, always_pull: bool) -> IdVal {
         let id = self.add_entity();
 
         self.c_pos.insert(
@@ -447,9 +531,17 @@ impl State {
             CPos{x, y, a: 0.0},
         );
         let mass = STAR_GRAV_MUL * size * size * size;
+        // GRAV_REACH = mass / dist2
+        //dist2 = mass / GRAV_REACH
+        let dist2 = if always_pull {
+            std::f64::INFINITY
+        } else {
+            mass / GRAV_REACH
+        };
+
         self.c_grav.insert(
             id,
-            CGrav{mass, dist2: mass * mass * GRAV_REACH},
+            CGrav{mass, dist2: dist2},
         );
         self.c_drawable.insert(
             id,
@@ -460,7 +552,7 @@ impl State {
                         graphics::DrawMode::fill(),
                         [0.0, 0.0],
                         size as f32,
-                        0.1,
+                        STAR_RES,
                         graphics::WHITE,
                     ).unwrap()
                 ),
@@ -480,7 +572,7 @@ impl State {
         return id;
     }
 
-    fn add_ship(&mut self, _ctx: &mut Context, m: MeshNum, x: f64, y: f64, thrust: f64, fuel: f64) -> IdVal {
+    fn add_ship(&mut self, ctx: &mut Context, m: MeshNum, x: f64, y: f64, thrust: f64, empty_thrust: f64, fuel: f64, ammo: usize) -> IdVal {
         let id = self.add_entity();
 
         self.c_pos.insert(
@@ -510,14 +602,46 @@ impl State {
             id,
             CShip {
                 thrust,
+                empty_thrust,
                 fuel,
+                ammo,
             }
+        );
+
+        self.add_trail(ctx, &id, SHIP_TRAIL_SZ);
+
+        return id;
+    }
+
+    fn add_trail(&mut self, ctx: &mut Context, pid: &IdVal, size: f32) -> IdVal {
+        let id = self.add_entity();
+        self.c_trail.insert(
+            id,
+            CTrail{
+                objid: *pid,
+                pts: Vec::new(),
+                max_len: SHIP_TRAIL_AMT,
+                size,
+                color: TRAIL_COLOR,
+            },
+        );
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::Blank,
+                r: std::f32::INFINITY,
+                minsz: 0.0,
+            },
+        );
+        self.c_pos.insert(
+            id,
+            CPos{x: 0.0, y: 0.0, a: 0.0},
         );
 
         return id;
     }
 
-    fn get_grav_a(gravs: &HashMap<IdVal, CGrav>, pos: &HashMap<IdVal, CPos>, px: f64, py: f64, id: &IdVal) -> (f64, f64) {
+    fn get_grav_a(gravs: &HashMap<IdVal, CGrav>, pos: &HashMap<IdVal, CPos>, px: f64, py: f64, id: &IdVal) -> (f64, f64, usize) {
         let mut ax: f64 = 0.0;
         let mut ay: f64 = 0.0;
 
@@ -553,9 +677,35 @@ impl State {
             ay += ga * dy;
         }
 
-        return (ax, ay);
+        return (ax, ay, count);
     }
 
+    fn s_trail(&mut self, ctx: &mut Context, dt: f64) {
+        for (id, t) in &mut self.c_trail {
+            match self.c_pos.get(&t.objid) {
+                Some(p) => {
+                    t.pts.insert(0, [p.x as f32, p.y as f32]);
+                    if t.pts.len() > t.max_len {
+                        t.pts.pop();
+                    }
+
+                    if let Some(mut d) = self.c_drawable.get_mut(&id) {
+                        d.thing = gen_fading_path(ctx, &t.pts[..], t.size, t.color);
+                    }
+                },
+                None => {
+                    // object must have been deleted
+                    // we should go too
+                    for e in &mut self.entities {
+                        if e.id == *id {
+                            e.to_destroy = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     fn s_predict(&mut self, ctx: &mut Context, dt: f64) {
         // for each dyn object for each gravity object in range
         for (id, p) in &mut self.c_predictable {
@@ -587,7 +737,7 @@ impl State {
                         }
 
                         let tmpid = 0;
-                        let (ax, ay) = State::get_grav_a(
+                        let (ax, ay, _) = State::get_grav_a(
                             &self.c_grav,
                             &self.c_pos,
                             fx,
@@ -621,36 +771,11 @@ impl State {
                                 }
                             }
                         }
-
-                        let dx = fx - objp.x;
-                        let dy = fy - objp.y;
-
-                        if (dx * dx) + (dy * dy) > p.max_dist2 {
-                            break;
-                        }
                     }
 
                     // if we have an assoicated CDrawable, update the mesh based on the points
-                    let mut updated_mesh = false;
-                    if p.valid_len >= 2 {
-                        if let Some(d) = self.c_drawable.get_mut(&id) {
-                            if let DrawThing::Mesh(ref mut m) = d.thing {
-                                //TODO update the mesh with the points
-                                let tm = graphics::Mesh::new_line(
-                                    ctx,
-                                    &p.pts[..p.valid_len],
-                                    1.0 / self.cam.s,
-                                    graphics::WHITE,
-                                );
-                                if let Ok(tmm) = tm {
-                                    *m = tmm;
-                                    updated_mesh = true;
-                                }
-                            }
-                        }
-                    }
-                    if !updated_mesh {
-                        //TODO get rid of it?
+                    if let Some(mut d) = self.c_drawable.get_mut(&id) {
+                        d.thing = gen_fading_path(ctx, &p.pts[..p.valid_len], 1.0/self.cam.s, 0.6);
                     }
                 },
                 None => {
@@ -671,7 +796,8 @@ impl State {
         for (id, d) in &mut self.c_dynamic {
             let p = &self.c_pos[id];
 
-            let (mut ax, mut ay) = State::get_grav_a(&self.c_grav, &self.c_pos, p.x, p.y, id);
+            let (mut ax, mut ay, count) = State::get_grav_a(&self.c_grav, &self.c_pos, p.x, p.y, id);
+            self.grav_count = count;
             ax += d.in_ax;
             ay += d.in_ay;
 
@@ -750,17 +876,20 @@ impl State {
             d.in_ax = 0.0;
             d.in_ay = 0.0;
 
-            if s.fuel > 0.0 {
-                //TODO taper thrust by mouse position
-                if self.input.rmb {
-                    d.in_ax = -p.a.cos() as f64 * s.thrust;
-                    d.in_ay = -p.a.sin() as f64 * s.thrust;
-                }
+            let tamt = if s.fuel > 0.0 {
+                s.thrust
+            } else {
+                s.empty_thrust
+            };
+            //TODO taper thrust by mouse position
+            if self.input.rmb {
+                d.in_ax = -p.a.cos() as f64 * tamt;
+                d.in_ay = -p.a.sin() as f64 * tamt;
+            }
 
-                s.fuel -= (d.in_ax + d.in_ay).abs() * dt;
-                if s.fuel < 0.0 {
-                    s.fuel = 0.0;
-                }
+            s.fuel -= (d.in_ax + d.in_ay).abs() * dt;
+            if s.fuel < 0.0 {
+                s.fuel = 0.0;
             }
         }
     }
@@ -814,14 +943,21 @@ impl ggez::event::EventHandler for State {
             self.log_time = timer::ticks(ctx) + LOG_TICKS;
             println!("fps: {}", timer::fps(ctx));
             println!("scale: {}", self.cam.s);
+            println!("grav_count: {}", self.grav_count);
+            println!(" - ");
+        }
+
+        if self.input.reset {
+            self.gen_level(ctx);
+            self.input.reset = false;
         }
 
         self.s_player(ctx, dt);
         self.s_move(ctx, dt);
         self.s_predict(ctx, dt);
+        self.s_trail(ctx, dt);
 
         self.s_destroy();
-
         Ok(())
     }
 
@@ -854,14 +990,17 @@ impl ggez::event::EventHandler for State {
         if let Some(pid) = self.playerid {
             //let p = self.c_pos.get(&pid).unwrap();
             let s = self.c_ship.get(&pid).unwrap();
+            let d = self.c_dynamic.get(&pid).unwrap();
             let mut ui = graphics::Text::new(
                 format!(
                     concat!(
-                        "/--------------\\\n",
-                        "|  fuel : {:04.0} |\n",
-                        "\\--------------/\n", 
+                        "/---------------\\\n",
+                        "|  fuel : {:04.0}  |\n",
+                        "|  zone : {:02}    |\n",
+                        "|  vel  : {:04.0}  |\n",
+                        "\\---------------/\n", 
                     ),
-                    s.fuel,
+                    s.fuel, self.level, ((d.x_vel * d.x_vel) + (d.y_vel * d.y_vel)).sqrt(),
                 ),
             );
 
@@ -933,7 +1072,7 @@ impl ggez::event::EventHandler for State {
         }
     }
 
-    fn key_down_event(&mut self, _ctx: &mut Context, keycode: input::keyboard::KeyCode, _keymods: input::keyboard::KeyMods, _repeat: bool) {
+    fn key_down_event(&mut self, ctx: &mut Context, keycode: input::keyboard::KeyCode, _keymods: input::keyboard::KeyMods, _repeat: bool) {
         match keycode {
             input::keyboard::KeyCode::Up |
             input::keyboard::KeyCode::W => {
@@ -956,6 +1095,12 @@ impl ggez::event::EventHandler for State {
             },
             input::keyboard::KeyCode::E => {
                 self.input.cw = true;
+            },
+            input::keyboard::KeyCode::R => {
+                self.input.reset = true;
+            },
+            input::keyboard::KeyCode::Escape => {
+                event::quit(ctx);
             },
             _ => (),
         };
@@ -985,13 +1130,107 @@ impl ggez::event::EventHandler for State {
             input::keyboard::KeyCode::E => {
                 self.input.cw = false;
             },
+            input::keyboard::KeyCode::R => {
+                self.input.reset = false;
+            },
             _ => (),
         };
     }
 }
 
+fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, start_c: f32) -> DrawThing {
+    if pts.len() < 3 {
+        return DrawThing::Blank;
+    }
+    let mut verts: Vec<graphics::Vertex> = Vec::new();
+    let mut inds: Vec<u32> = Vec::new();
+
+    let mut prev_point = pts[0];
+    let mut current_point = pts[0];
+    let mut future_point = pts[1];
+
+    let almost_last = pts.len()-1;
+    for i in 0..almost_last {
+        let c = start_c * (((pts.len() - i) as f32) / (pts.len() as f32));
+
+        // how to place points with width
+        let mut v1 = graphics::Vertex{
+            pos: current_point,
+            uv: [0.0, 0.0],
+            color: [c; 4],
+        };
+        let mut v2 = graphics::Vertex{
+            pos: current_point,
+            uv: [0.0, 0.0],
+            color: [c; 4],
+        };
+
+        future_point = pts[i+1];
+
+        let dx = future_point[0] - prev_point[0];
+        let dy = future_point[1] - prev_point[1];
+
+        let a = dy.atan2(dx);
+        let dx = a.cos() * s;
+        let dy = a.sin() * s;
+        v1.pos[0] += dy;
+        v1.pos[1] -= dx;
+        v2.pos[0] -= dy;
+        v2.pos[1] += dx;
+
+        verts.push(v1);
+        verts.push(v2);
+        
+        prev_point = current_point;
+        current_point = future_point;
+
+        let i = i as u32;
+        inds.push((i*2)+0);
+        inds.push((i*2)+2);
+        inds.push((i*2)+1);
+
+        inds.push((i*2)+1);
+        inds.push((i*2)+2);
+        inds.push((i*2)+3);
+    }
+
+    verts[0].color = [0.0; 4];
+    verts[1].color = [0.0; 4];
+
+    verts.push(graphics::Vertex{
+        pos: future_point,
+        uv: [0.0, 0.0],
+        color: [0.0; 4],
+    });
+    verts.push(graphics::Vertex{
+        pos: future_point,
+        uv: [0.0, 0.0],
+        color: [0.0; 4],
+    });
+
+    let tm = graphics::Mesh::from_raw(
+        ctx,
+        &verts,
+        &inds,
+        None,
+    );
+    return DrawThing::Mesh(tm.unwrap());
+
+    /*let tm = graphics::Mesh::new_line(
+        ctx,
+        pts,
+        s,
+        graphics::WHITE,
+    );
+    return match tm {
+        Ok(m) => DrawThing::Mesh(m),
+        _ => DrawThing::Blank,
+    };*/
+}
+
 fn load_mesh(ctx: &mut Context, p: &str, scale: f32) -> (graphics::Mesh, f32) {
-    let f = filesystem::open(ctx, std::path::Path::new(p)).unwrap();
+    let f = filesystem::open(ctx, std::path::Path::new(p)).expect("Unable to find mesh file");
+
     let f = BufReader::new(f);
     // sort of parse a .obj file
     let mut verts: Vec<graphics::Vertex> = Vec::new();
@@ -1036,7 +1275,7 @@ fn load_mesh(ctx: &mut Context, p: &str, scale: f32) -> (graphics::Mesh, f32) {
                 },
                 Some("f") => {
                     let mut i1 = i.next().unwrap().split("/");
-                    let i1_v : u32 = i1.next().unwrap().parse::<u32>().unwrap() - 1;
+                    let i1_v : u32 = i1.next().unwrap().parse::<u32>().expect("Mesh doesn't have uvs") - 1;
                     let i1_uv : u32 = i1.next().unwrap().parse::<u32>().unwrap() - 1;
 
                     let mut i2 = i.next().unwrap().split("/");
