@@ -8,27 +8,70 @@ use std::io::{BufReader, BufRead};
 
 const GAME_NAME: &str = "Falling Carefully";
 const STAR_GRAV_MUL: f64 = 1.5;
-const STAR_RES: f32 = 30.0;
-const SHIP_SCALE: f32 = 15.0;
-const SHIP_TRAIL_RATE: f64 = 1.0;
-const SHIP_TRAIL_SZ: f32 = 5.0;
-const SHIP_TRAIL_AMT: usize = 150;
-const PRED_RATE: f64 = 0.0;
-const PRED_TSTEP: f64 = 0.45;
-const PRED_AMT: usize = 45;
+const STAR_RES: f32 = 27.0;
+const STAR_E_SZ: f32 = 1500.0;
+const E_TG: f64 = 0.0018;
+const E_TS: f64 = 0.0012;
+const E_TF: f64 = 0.0009;
+const EXPLOSION_RES: f32 = 10.0;
+const EXPLOSION_STROKE: f32 = 27.0;
+const PORTAL_SCALE: f32 = 300.0;
+const PORTAL_GRAV: f64 = 300.0 * 200.0 * 100.0;
+const SHIP_SCALE: f32 = 18.0;
+const SHIP_TRAIL_SZ: f32 = 3.6;
+const SHIP_TRAIL_AMT: usize = 120;
+const TURRET_SCALE: f32 = 120.0;
 const POWERUP_SCALE: f32 = 100.0;
+const FUEL_PER_PUP: f64 = 450.0;
 const SHIP_MINSZ: f32 = 1.0;    // minimun scale factor it will get to
 const GRAV_REACH: f64 = 0.45;    // minimum pull before out of range
 const MAX_CAM_SCALE: f32 = 90.0;
-const MIN_CAM_SCALE: f32 = 0.24;
+const MIN_CAM_SCALE: f32 = 0.21;
 const ZOOM_AMT: f32 = 0.06;
 const LOG_TICKS: usize = 81;
-const PLAYER_THRUST: f64 = 42.0;
-const PLAYER_FUEL: f64 = 600.0;
-const PLAYER_EMPTY_THRUST: f64 = 9.0;
-const PLAYER_AMMO: usize = 3;
-const TURRET_PUSHBACK: f64 = 90.0;
-const TRAIL_COLOR: f32 = 0.45;
+const PLAYER_THRUST: f64 = 69.0;
+const PLAYER_FUEL: f64 = 1200.0;
+const PLAYER_EMPTY_THRUST: f64 = 12.0;
+const PLAYER_AMMO: usize = 15;
+const PLAYER_NUKE_SIZE: f32 = 900.0;
+const PLAYER_NUKE_IVEL: f64 = 750.0;
+const PLAYER_NUKE_DIST: f64 = 18.0;
+const PLAYER_NUKE_THRUST: f64 = 15.0;
+const NUKE_TRAIL_SZ: f32 = 2.0;
+const EXPLOSION_COLOR: [f32; 4] = [1.0, 0.12, 0.27, 0.9];
+const SHIP_TRAIL_COLOR: [f32; 4] = [1.0, 0.81, 0.90, 0.69];
+const NUKE_TRAIL_COLOR: [f32; 4] = [1.0, 0.0, 0.0, 0.6];
+const PRED_COLOR: [f32; 4] = [0.6, 0.75, 1.0, 0.69];
+const PRED_SIZE: f32 = 0.81;
+const PRED_RATE: f64 = 0.0;
+const PRED_TSTEP: f64 = 0.27;
+const PRED_AMT: usize = 45;
+const TRAIL_DIST: f32 = 30.0;
+const TURRET_FIRE_RATE: f64 = 3.0;
+const TURRET_UPDATE_RATE: f64 = 1.0;
+const TURRET_NUKE_THRUST: f64 = 180.0;
+const TURRET_NUKE_SIZE: f32 = 270.0;
+const TURRET_NUKE_DIST: f64 = 60.0;
+const TURRET_NUKE_IVEL: f64 = 300.0;
+const TURRET_DIST2: f64 = 8000.0 * 8000.0;
+
+const GUIDE: &str = concat!(
+    "      Welcome to Falling Carefully\n",
+    "\n",
+    "     @     =  Your Ship (Right Click to Thrust)\n",
+    "    =>     =  Nuke (Left Click to Release)\n",
+    "     *     =  Fuel\n",
+    "     #     =  Enemy Turret\n",
+    "     &     =  Portal Lock (Destroy These)\n",
+    "\n",
+    "   ( X )   =  Closed portal\n",
+    "\n",
+    "  \\ | /\n",
+    "--(   )--  = Open portal to Next Zone\n",
+    "  / | \\\n",
+    "\n",
+    "       Press R to Start / Restart\n",
+);
 
 type IdVal = usize;
 
@@ -61,7 +104,8 @@ struct CTrail {
     pts: Vec<[f32; 2]>, // x, y, thrust
     max_len: usize,
     size: f32, // width of the trail
-    color: f32,
+    color: [f32; 4],
+    dist: f32,
 }
 
 // Used for predictions on movement
@@ -73,22 +117,48 @@ struct CPredictable {
     till_next: f64,
     valid_len: usize,
     collidable: bool,
+    color: [f32; 4],
 }
 
 enum CollisionType {
-    Explosion(f64),
+    Explosion(f32, bool),
     FuelPup(f64),
+    Portal,
+    None,
 }
 
-struct CCollidable {
-    rad2: f64,
+struct CCollider {
+    rad: f64,
     col_action: CollisionType,
     stop_col: bool,
+}
+
+struct CCollides {
+    rad: f64,
+}
+
+struct CExplosion {
+    grow_size: f32,
+    time_grow: f64,
+    time_stay: f64,
+    time_fade: f64,
+    time_so_far: f64,
+}
+
+struct CRocket {
+    thrust: f64,
+    target: Option<IdVal>,
+}
+
+struct CTurret {
+    fire_rate: f64,
+    till_next_shot: f64,
 }
 
 enum DrawThing {
     Blank,
     Mesh(graphics::Mesh),
+    MeshScale(graphics::Mesh, f32),
     MeshInd(usize),
 }
 
@@ -108,6 +178,9 @@ impl CDrawable {
             DrawThing::Blank => return Ok(()),
             DrawThing::Mesh(ref m) => {
                 return graphics::draw(ctx, m, param);
+            },
+            DrawThing::MeshScale(ref m, sc) => {
+                return graphics::draw(ctx, m, param.scale([sc,sc]));
             },
             DrawThing::MeshInd(i) => {
                 let (m, _) = &st.meshs[i];
@@ -219,6 +292,9 @@ enum MeshNum {
     CapMesh,
     HashMesh,
     NukeMesh,
+    LockMesh,
+    ClosedMesh,
+    OpenMesh,
 }
 
 struct State {
@@ -232,14 +308,25 @@ struct State {
     c_pos: HashMap<IdVal, CPos>,
     c_grav: HashMap<IdVal, CGrav>,
     c_dynamic: HashMap<IdVal, CDynamic>,
-    c_collidable: HashMap<IdVal, CCollidable>,
+    c_collider: HashMap<IdVal, CCollider>,
+    c_collides: HashMap<IdVal, CCollides>,
     c_drawable: HashMap<IdVal, CDrawable>,
     c_trail: HashMap<IdVal, CTrail>,
     c_predictable: HashMap<IdVal, CPredictable>,
     c_ship: HashMap<IdVal, CShip>,
+    c_explosion: HashMap<IdVal, CExplosion>,
+    c_rocket: HashMap<IdVal, CRocket>,
+    c_turret: HashMap<IdVal, CTurret>,
+
+    locks: Vec<IdVal>,
+    portal: Option<IdVal>,
+
+    s_turret_next: f64,
 
     input: InputState,
     playerid: Option<IdVal>,
+    finished: bool, // finished level
+    started: bool,
 
     font: graphics::Font,
 
@@ -252,15 +339,18 @@ impl State {
     fn new(ctx: &mut Context) -> ggez::GameResult<State> {
         let s = State{
             meshs: [
-                    ("\\ang.obj", SHIP_SCALE),
-                    ("\\A.obj", SHIP_SCALE),
-                    ("\\ast.obj", POWERUP_SCALE),
-                    ("\\bangv.obj", SHIP_SCALE),
-                    ("\\capital.obj", SHIP_SCALE),
-                    ("\\pnd.obj", POWERUP_SCALE),
-                    ("\\nuke.obj", SHIP_SCALE),
+                    ("\\ang.obj", SHIP_SCALE, [1.0; 4]),
+                    ("\\A.obj", SHIP_SCALE, [1.0; 4]),
+                    ("\\ast.obj", POWERUP_SCALE, [0.75, 0.75, 0.81, 1.0]),
+                    ("\\bangv.obj", POWERUP_SCALE, [0.75, 0.75, 1.0, 1.0]),
+                    ("\\capital.obj", SHIP_SCALE, [1.0; 4]),
+                    ("\\pnd.obj", TURRET_SCALE, [0.9, 0.48, 0.45, 1.0]),
+                    ("\\nuke.obj", SHIP_SCALE, [0.81, 0.3, 0.3, 1.0]),
+                    ("\\lock.obj", POWERUP_SCALE, [0.5, 0.5, 0.69, 1.0]),
+                    ("\\ClosedPortal.obj", PORTAL_SCALE, [0.6, 0.6, 0.81, 1.0]),
+                    ("\\OpenPortal.obj", PORTAL_SCALE, [0.3, 0.42, 0.9, 1.0]),
                 ].iter().map(
-                |x| load_mesh(ctx, x.0, x.1)
+                |x| load_mesh(ctx, x.0, x.1, x.2)
             ).collect(),
             rng: SmallRng::from_entropy(),
 
@@ -271,7 +361,7 @@ impl State {
                 update: true,
             },
 
-            level: 1,
+            level: 0,
 
             font: graphics::Font::new(ctx, "\\NovaMono-Regular.ttf").unwrap(),
 
@@ -299,12 +389,24 @@ impl State {
             c_pos: HashMap::new(),
             c_grav: HashMap::new(),
             c_dynamic: HashMap::new(),
-            c_collidable: HashMap::new(),
+            c_collider: HashMap::new(),
+            c_collides: HashMap::new(),
             c_drawable: HashMap::new(),
             c_trail: HashMap::new(),
             c_predictable: HashMap::new(),
             c_ship: HashMap::new(),
+            c_explosion: HashMap::new(),
+            c_rocket: HashMap::new(),
+            c_turret: HashMap::new(),
+
+            locks: Vec::new(),
+            portal: None,
+
+            s_turret_next: 0.0,
+
             playerid: None,
+            finished: false,
+            started: false,
 
         };
 
@@ -316,37 +418,104 @@ impl State {
         self.c_pos.clear();
         self.c_grav.clear();
         self.c_dynamic.clear();
-        self.c_collidable.clear();
+        self.c_collider.clear();
+        self.c_collides.clear();
         self.c_drawable.clear();
         self.c_trail.clear();
         self.c_predictable.clear();
         self.c_ship.clear();
+        self.c_explosion.clear();
+        self.c_rocket.clear();
+        self.c_turret.clear();
+        self.locks.clear();
+        self.portal = None;
+        self.s_turret_next = 0.0;
         self.playerid = None;
+        self.level = 0;
+        self.finished = false;
+        self.started = true;
     }
 
-    fn gen_level(&mut self, ctx: &mut Context) {
+    fn s_destroy(&mut self) {
+        let mut i = 0;
+        while i < self.entities.len() {
+            let e = &self.entities[i];
+            if !e.to_destroy {
+                i += 1;
+                continue;
+            }
+
+            if let Some(pid) = self.playerid {
+                if pid == e.id {
+                    self.playerid = None;
+                }
+            }
+
+            let mut j = 0;
+            while j < self.locks.len() {
+                if self.locks[j] == e.id {
+                    self.locks.remove(j);
+                } else {
+                    j += 1;
+                }
+            }
+            if self.locks.len() == 0 {
+                //open portal
+                if let Some(portalid) = &self.portal {
+                    let d = self.c_drawable.get_mut(portalid).unwrap();
+                    let c = self.c_collider.get_mut(portalid).unwrap();
+
+                    c.col_action = CollisionType::Portal;
+                    d.thing = DrawThing::MeshInd(MeshNum::OpenMesh as usize);
+                }
+            }
+
+            self.c_pos.remove(&e.id);
+            self.c_grav.remove(&e.id);
+            self.c_dynamic.remove(&e.id);
+            self.c_collider.remove(&e.id);
+            self.c_collides.remove(&e.id);
+            self.c_drawable.remove(&e.id);
+            self.c_predictable.remove(&e.id);
+            self.c_ship.remove(&e.id);
+            self.c_trail.remove(&e.id);
+            self.c_explosion.remove(&e.id);
+            self.c_rocket.remove(&e.id);
+            self.c_turret.remove(&e.id);
+
+            self.entities.remove(i);
+        }
+    }
+
+    fn gen_level(&mut self, ctx: &mut Context, level: usize) {
         self.reset();
+        self.level = level;
         //TODO make this good
         //need portal, key, turrets, boosters
+
+        // add Portal
+
+        self.add_portal(ctx, 0.0, 0.0, 0.0);
 
         // add stars
         let num_big = self.rng.gen_range(1, 6);
         let mut i = 0;
         'star_loop_large: while i < num_big {
             let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
-            let d = self.rng.gen_range(0.0, 3000.0);
+            let d = self.rng.gen_range(450.0, 3000.0);
 
             let x = d * a.cos();
             let y = d * a.sin();
             let s = self.rng.gen_range(300.0, 360.0 + (300.0 / (num_big as f64)));
 
-            for (cid, c) in &self.c_collidable {
+            for (cid, c) in &self.c_collider {
                 let colpos = &self.c_pos.get(cid).unwrap();
                 
                 let dx = colpos.x - x;
                 let dy = colpos.y - y;
 
-                if (c.rad2 + (s*s)) > ((dx * dx) + (dy * dy)) {
+                let rdist = c.rad + s;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
                     // would overlap
                     continue 'star_loop_large;
                 }
@@ -362,23 +531,23 @@ impl State {
             i += 1;
         }
 
-        let num_small = self.rng.gen_range(45, 270);
+        let num_small = self.rng.gen_range(45, 180);
         let mut i = 0;
         'star_loop_small: while i < num_small {
             let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
-            let d = self.rng.gen_range(900.0, 6000.0);
+            let d = self.rng.gen_range(999.0, 6000.0);
 
             let x = d * a.cos();
             let y = d * a.sin();
-            let s = self.rng.gen_range(45.0, 90.0);
+            let s = self.rng.gen_range(45.0, 120.0);
 
-            for (cid, c) in &self.c_collidable {
+            for (cid, c) in &self.c_collider {
                 let colpos = &self.c_pos.get(cid).unwrap();
                 
                 let dx = colpos.x - x;
                 let dy = colpos.y - y;
-
-                if (c.rad2 + (s*s)) > ((dx * dx) + (dy * dy)) {
+                let rdist = c.rad + s;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
                     // would overlap
                     continue 'star_loop_small;
                 }
@@ -394,8 +563,43 @@ impl State {
             i += 1;
         }
 
+        let (_, turret_r) = self.meshs[MeshNum::HashMesh as usize];
+        let turret_r = turret_r as f64;
         let mut i = 0;
-        let fuel_amt = 90 / self.level;
+        let turret_amt = 1 + (2 * level);
+        'turret_loop: while i < turret_amt {
+            let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
+            let d = self.rng.gen_range(900.0, 6600.0);
+
+            let x = d * a.cos();
+            let y = d * a.sin();
+
+            let a = self.rng.gen_range(-std::f32::consts::PI, std::f32::consts::PI);
+
+            for (cid, c) in &self.c_collider {
+                let colpos = &self.c_pos.get(cid).unwrap();
+                
+                let dx = colpos.x - x;
+                let dy = colpos.y - y;
+                let rdist = c.rad + turret_r;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
+                    // would overlap
+                    continue 'turret_loop;
+                }
+            }
+
+            self.add_turret(
+                ctx,
+                x, y, a
+            );
+
+            i += 1;
+        }
+
+        let (_, fuel_r) = self.meshs[MeshNum::HashMesh as usize];
+        let fuel_r = fuel_r as f64;
+        let mut i = 0;
+        let fuel_amt = 90 / (level + 1);
         'fuel_loop: while i < fuel_amt {
             let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
             let d = self.rng.gen_range(450.0, 4500.0);
@@ -403,13 +607,13 @@ impl State {
             let x = d * a.cos();
             let y = d * a.sin();
 
-            for (cid, c) in &self.c_collidable {
+            for (cid, c) in &self.c_collider {
                 let colpos = &self.c_pos.get(cid).unwrap();
                 
                 let dx = colpos.x - x;
                 let dy = colpos.y - y;
-
-                if c.rad2 > ((dx * dx) + (dy * dy)) {
+                let rdist = c.rad + fuel_r + 1.0;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
                     // would overlap
                     continue 'fuel_loop;
                 }
@@ -423,18 +627,74 @@ impl State {
             i += 1;
         }
 
-        let shipid = self.add_ship(
-            ctx,
-            MeshNum::AngMesh,
-            -6000.0, -1500.0,
-            PLAYER_THRUST, PLAYER_EMPTY_THRUST, PLAYER_FUEL,
-            PLAYER_AMMO,
-        );
-        self.make_player(shipid);
+        let (_, lock_r) = self.meshs[MeshNum::HashMesh as usize];
+        let lock_r = lock_r as f64;
+        let num_locks = level+1;
+        let mut i = 0;
+        'lock_loop: while i < num_locks {
+            let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
+            let d = self.rng.gen_range(300.0, 6000.0);
 
-        // add prediction on the player ship
-        self.add_prediction(ctx, shipid, true);
+            let x = d * a.cos();
+            let y = d * a.sin();
+
+            for (cid, c) in &self.c_collider {
+                let colpos = &self.c_pos.get(cid).unwrap();
+                
+                let dx = colpos.x - x;
+                let dy = colpos.y - y;
+                let rdist = c.rad + lock_r + 45.0;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
+                    // would overlap
+                    continue 'lock_loop;
+                }
+            }
+            self.add_lock(
+                ctx,
+                x, y, a as f32,
+            );
+
+            i += 1;
+        }
+
+        let mut spawned_player = false;
+        let (_, player_r) = self.meshs[MeshNum::AngMesh as usize];
+        let player_r = player_r as f64;
+        'player_loop: while !spawned_player {
+            let a = self.rng.gen_range(0.0, std::f64::consts::PI * 2.0);
+            let d = self.rng.gen_range(5500.0, 6900.0);
+
+            let x = d * a.cos();
+            let y = d * a.sin();
+
+            for (cid, c) in &self.c_collider {
+                let colpos = &self.c_pos.get(cid).unwrap();
+                
+                let dx = colpos.x - x;
+                let dy = colpos.y - y;
+                let rdist = c.rad + player_r + 100.0;
+                if (rdist * rdist) > ((dx * dx) + (dy * dy)) {
+                    // would overlap
+                    continue 'player_loop;
+                }
+            }
+
+            spawned_player = true;
+
+            let shipid = self.add_ship(
+                ctx,
+                MeshNum::AngMesh,
+                x, y,
+                PLAYER_THRUST, PLAYER_EMPTY_THRUST, PLAYER_FUEL,
+                PLAYER_AMMO,
+            );
+            self.make_player(shipid);
+
+            // add prediction on the player ship
+            self.add_prediction(ctx, shipid, true);
+        }
         
+        self.started = true;
     }
 
     fn make_player(&mut self, id: IdVal) {
@@ -455,6 +715,108 @@ impl State {
         return id;
     }
 
+    fn add_portal(&mut self, _ctx: &mut Context, x: f64, y: f64, a: f32) -> IdVal {
+        let id = self.add_entity();
+
+        let i = MeshNum::ClosedMesh as usize;
+        let (_, r) = self.meshs[i];
+
+        self.c_pos.insert(
+            id,
+            CPos{x, y, a},
+        );
+        self.c_grav.insert(
+            id,
+            CGrav{mass: PORTAL_GRAV, dist2: std::f64::INFINITY},
+        );
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::MeshInd(i),
+                r,
+                minsz: 0.0,
+            }
+        );
+        self.c_collider.insert(
+            id,
+            CCollider{
+                rad: r as f64,
+                col_action: CollisionType::None,
+                stop_col: false,
+            },
+        );
+
+        self.portal = Some(id);
+
+        return id;
+    }
+
+    fn add_lock(&mut self, _ctx: &mut Context, x: f64, y: f64, a: f32) -> IdVal {
+        let id = self.add_entity();
+
+        let i = MeshNum::LockMesh as usize;
+        let (_, r) = self.meshs[i];
+
+        self.c_pos.insert(
+            id,
+            CPos{x, y, a},
+        );
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::MeshInd(i),
+                r,
+                minsz: 0.0,
+            }
+        );
+        self.c_collides.insert(
+            id,
+            CCollides{
+                rad: r as f64,
+            },
+        );
+
+        self.locks.push(id);
+
+        return id;
+    }
+
+    fn add_turret(&mut self, _ctx: &mut Context, x: f64, y: f64, a: f32) -> IdVal {
+        let id = self.add_entity();
+
+        let i = MeshNum::HashMesh as usize;
+        let (_, r) = self.meshs[i];
+
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::MeshInd(i),
+                r,
+                minsz: 0.0,
+            }
+        );
+        self.c_pos.insert(
+            id,
+            CPos{x, y, a},
+        );
+        self.c_collides.insert(
+            id,
+            CCollides{
+                rad: r as f64,
+            },
+        );
+
+        self.c_turret.insert(
+            id,
+            CTurret{
+                fire_rate: TURRET_FIRE_RATE,
+                till_next_shot: 0.0,
+            },
+        );
+
+        return id;
+    }
+
     fn add_fuel_powerup(&mut self, _ctx: &mut Context, x: f64, y: f64) -> IdVal {
         let id = self.add_entity();
 
@@ -469,11 +831,11 @@ impl State {
                 minsz: 0.0,
             }
         );
-        self.c_collidable.insert(
+        self.c_collider.insert(
             id,
-            CCollidable{
-                rad2: (r*r) as f64,
-                col_action: CollisionType::FuelPup(100.0),
+            CCollider{
+                rad: r as f64,
+                col_action: CollisionType::FuelPup(FUEL_PER_PUP),
                 stop_col: false,
             },
         );
@@ -481,11 +843,17 @@ impl State {
             id,
             CPos{x, y, a: 0.0},
         );
+        self.c_collides.insert(
+            id,
+            CCollides{
+                rad: r as f64,
+            },
+        );
 
         return id;
     }
 
-    fn add_prediction(&mut self, ctx: &mut Context, objid: IdVal, drawable: bool) -> IdVal {
+    fn add_prediction(&mut self, _ctx: &mut Context, objid: IdVal, drawable: bool) -> IdVal {
         let p_id = self.add_entity();
 
         let mut ptsvec = Vec::new();
@@ -503,6 +871,7 @@ impl State {
                 till_next: 0.0,
                 valid_len: 0,
                 collidable: true,
+                color: PRED_COLOR,
             },
         );
         if drawable {
@@ -560,11 +929,11 @@ impl State {
                 minsz: 0.0,
             },
         );
-        self.c_collidable.insert(
+        self.c_collider.insert(
             id,
-            CCollidable{
-                rad2: size * size,
-                col_action: CollisionType::Explosion(100.0),
+            CCollider{
+                rad: size,
+                col_action: CollisionType::Explosion(STAR_E_SZ, false),
                 stop_col: true,
             },
         );
@@ -598,6 +967,12 @@ impl State {
                 in_ay: 0.0,
             },
         );
+        self.c_collides.insert(
+            id,
+            CCollides{
+                rad: rad as f64,
+            },
+        );
         self.c_ship.insert(
             id,
             CShip {
@@ -608,12 +983,12 @@ impl State {
             }
         );
 
-        self.add_trail(ctx, &id, SHIP_TRAIL_SZ);
+        self.add_trail(ctx, &id, SHIP_TRAIL_SZ, SHIP_TRAIL_COLOR);
 
         return id;
     }
 
-    fn add_trail(&mut self, ctx: &mut Context, pid: &IdVal, size: f32) -> IdVal {
+    fn add_trail(&mut self, _ctx: &mut Context, pid: &IdVal, size: f32, color: [f32; 4]) -> IdVal {
         let id = self.add_entity();
         self.c_trail.insert(
             id,
@@ -622,7 +997,8 @@ impl State {
                 pts: Vec::new(),
                 max_len: SHIP_TRAIL_AMT,
                 size,
-                color: TRAIL_COLOR,
+                color: color,
+                dist: TRAIL_DIST,
             },
         );
         self.c_drawable.insert(
@@ -639,6 +1015,116 @@ impl State {
         );
 
         return id;
+    }
+
+    fn spawn_explosion(&mut self, ctx: &mut Context, px: f64, py: f64, size: f32, collidable: bool) -> IdVal {
+        let id = self.add_entity();
+        self.c_pos.insert(
+            id,
+            CPos{x: px, y: py, a: 0.0},
+        );
+
+        let s64 = size as f64;
+        let tg = E_TG * s64;
+        let ts = tg + (E_TS * s64);
+        let tf = ts + (E_TF * s64);
+        self.c_explosion.insert(
+            id,
+            CExplosion{
+                grow_size: size,
+                time_grow: tg,
+                time_stay: ts,
+                time_fade: tf,
+                time_so_far: 0.0,
+            },
+        );
+
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::MeshScale(
+                    graphics::Mesh::new_circle(
+                        ctx,
+                        graphics::DrawMode::stroke(EXPLOSION_STROKE),
+                        [0.0, 0.0],
+                        size,
+                        EXPLOSION_RES,
+                        graphics::Color::from(EXPLOSION_COLOR),
+                    ).unwrap(),
+                    0.0,
+                ),
+                r: 30.0,
+                minsz: 0.0,
+            },
+        );
+
+        if collidable {
+            self.c_collider.insert(
+                id,
+                CCollider{
+                    rad: 0.0,
+                    col_action: CollisionType::Explosion(size/1.5, false),
+                    stop_col: false,
+                },
+            );
+        }
+
+        return id;
+    }
+
+    fn spawn_nuke(&mut self, ctx: &mut Context, px: f64, py: f64, a: f32, vx: f64, vy: f64, thrust: f64, target: Option<IdVal>, explosion_size: f32) {
+        let id = self.add_entity();
+
+        self.c_pos.insert(
+            id,
+            CPos{x: px, y: py, a: a},
+        );
+
+        let i = MeshNum::NukeMesh as usize;
+        let (_, rad) = self.meshs[i];
+        self.c_drawable.insert(
+            id,
+            CDrawable{
+                thing: DrawThing::MeshInd(i),
+                r: rad,
+                minsz: 0.0,
+            },
+        );
+        self.c_dynamic.insert(
+            id,
+            CDynamic {
+                x_vel: vx,
+                y_vel: vy,
+                in_ax: 0.0,
+                in_ay: 0.0,
+            },
+        );
+        self.c_collides.insert(
+            id,
+            CCollides{
+                rad: rad as f64,
+            },
+        );
+        if thrust != 0.0 {
+            self.c_rocket.insert(
+                id,
+                CRocket{
+                    thrust,
+                    target,
+                }
+            );
+        }
+
+        self.add_trail(ctx, &id, NUKE_TRAIL_SZ, NUKE_TRAIL_COLOR);
+
+        self.c_collider.insert(
+            id,
+            CCollider{
+                rad: rad as f64,
+                col_action: CollisionType::Explosion(explosion_size, true),
+                stop_col: false,
+            },
+        );
     }
 
     fn get_grav_a(gravs: &HashMap<IdVal, CGrav>, pos: &HashMap<IdVal, CPos>, px: f64, py: f64, id: &IdVal) -> (f64, f64, usize) {
@@ -680,13 +1166,185 @@ impl State {
         return (ax, ay, count);
     }
 
-    fn s_trail(&mut self, ctx: &mut Context, dt: f64) {
+    fn raycast(colliders: &HashMap<IdVal, CCollider>, pos: &HashMap<IdVal, CPos>, px1: f64, py1: f64, px2: f64, py2: f64) -> bool {
+        // dist from line to point
+        // (a * x0 + b * y0 + c) / sqrt((a*a) + (b*b))
+        // where a = (y1-y2), b = (x2-x1), c = ((x1-x2)y1 + (y2-y1)x1)
+        // point 0 being the circle, points 1 and 2 being the ends of the line
+
+        let b = px2 - px1;
+        let a = py1 - py2;
+        let c = ((px1 - px2) * py1) + ((py2 - py1) * px1);
+        let d = (b * b) + (a * a);
+
+        for (cid, col) in colliders {
+            // check if line in circles
+            let cp = pos.get(cid).unwrap();
+            let mut dist2 = (a * cp.x) + (b * cp.y) + c;
+            dist2 *= dist2;
+            dist2 /= d;
+
+            if dist2 < (col.rad * col.rad) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn s_turret(&mut self, ctx: &mut Context, mut dt: f64) {
+        self.s_turret_next += dt;
+        if self.s_turret_next > TURRET_UPDATE_RATE {
+            dt = self.s_turret_next;
+            self.s_turret_next = 0.0;
+        } else {
+            return;
+        }
+
+        if self.playerid.is_none() {
+            return;
+        }
+
+        let pid = self.playerid.unwrap();
+        let ppos = self.c_pos.get(&pid).unwrap();
+
+        let mut launch_nuke = false;
+        let mut na = 0.0;
+        let mut nxv = 0.0;
+        let mut nyv = 0.0;
+        let mut npx = 0.0;
+        let mut npy = 0.0;
+
+        for (id, t) in &mut self.c_turret {
+            t.till_next_shot -= dt;
+            if t.till_next_shot > 0.0 {
+                continue;
+            }
+            let p = self.c_pos.get(id).unwrap();
+            let dx = p.x - ppos.x;
+            let dy = p.y - ppos.y;
+            let d2 = (dx*dx)+(dy*dy);
+            if d2 < TURRET_DIST2 && State::raycast(
+                &self.c_collider, &self.c_pos,
+                ppos.x, ppos.y,
+                p.x, p.y,
+            ) {
+                t.till_next_shot = t.fire_rate;
+                // spawn nuke
+                launch_nuke = true;
+                na = dy.atan2(dx) as f32;
+                let nac = -na.cos() as f64;
+                let nas = -na.sin() as f64;
+                nxv = nac * TURRET_NUKE_IVEL;
+                nyv = nas * TURRET_NUKE_IVEL;
+                npx = p.x + (nac * TURRET_NUKE_DIST);
+                npy = p.y + (nas * TURRET_NUKE_DIST);
+
+                break; // don't have to all fire at once
+            }
+        }
+
+        if launch_nuke {
+            self.spawn_nuke(
+                ctx,
+                npx, npy, // pos
+                na, // angle
+                nxv, // xvel
+                nyv, // yvel
+                TURRET_NUKE_THRUST, // thrust
+                Some(pid), // target
+                TURRET_NUKE_SIZE, // explosion size
+            );
+        }
+    }
+
+    fn s_explosion(&mut self, _ctx: &mut Context, dt: f64) {
+        for (id, ex) in &mut self.c_explosion {
+            ex.time_so_far += dt;
+            let d = &mut self.c_drawable.get_mut(id).unwrap();
+
+            if ex.time_so_far <= ex.time_grow {
+                // grow
+                let mut r = ex.time_so_far / ex.time_grow;
+                r = r.sqrt();
+                if let DrawThing::MeshScale(_, ref mut sc) = d.thing {
+                    *sc = r as f32;
+                }
+                r *= ex.grow_size as f64;
+                if let Some(c) = &mut self.c_collider.get_mut(id) {
+                    c.rad = r;
+                }
+            } else if ex.time_so_far <= ex.time_stay {
+                continue;
+            } else if ex.time_so_far <= ex.time_fade{
+                // fade out?
+                let mut r = 1.0 - ((ex.time_so_far - ex.time_stay) / (ex.time_fade - ex.time_stay));
+                if let DrawThing::MeshScale(_, ref mut sc) = d.thing {
+                    *sc = r as f32;
+                }
+                r *= ex.grow_size as f64;
+                if let Some(c) = &mut self.c_collider.get_mut(id) {
+                    c.rad = r;
+                }
+            } else {
+                // remove this explosion
+                for e in &mut self.entities {
+                    if e.id == *id {
+                        e.to_destroy = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn s_rocket(&mut self, _ctx: &mut Context, _dt: f64) {
+        for (id, r) in &mut self.c_rocket {
+            // if they have a target, orient them
+            let pa;
+            if let Some(tid) = &r.target {
+                let tpx;
+                let tpy;
+                if let Some(tp) = self.c_pos.get(tid) {
+                    tpx = tp.x;
+                    tpy = tp.y;
+                } else {
+                    // target it probably destroyed
+                    r.target = None;
+                    continue;
+                }
+                let p = self.c_pos.get_mut(id).unwrap();
+                let dx = p.x - tpx;
+                let dy = p.y - tpy;
+                p.a = dy.atan2(dx) as f32;
+                pa = p.a;
+            } else {
+                let p = self.c_pos.get_mut(id).unwrap();
+                pa = p.a;
+            }
+            // do thrust
+            let d = self.c_dynamic.get_mut(id).unwrap();
+
+            d.in_ax = -pa.cos() as f64 * r.thrust;
+            d.in_ay = -pa.sin() as f64 * r.thrust;
+
+        }
+    }
+
+    fn s_trail(&mut self, ctx: &mut Context, _dt: f64) {
         for (id, t) in &mut self.c_trail {
             match self.c_pos.get(&t.objid) {
                 Some(p) => {
-                    t.pts.insert(0, [p.x as f32, p.y as f32]);
-                    if t.pts.len() > t.max_len {
-                        t.pts.pop();
+                    let px = p.x as f32;
+                    let py = p.y as f32;
+                    if t.pts.len() < 3 || (t.pts[1][0] - px).abs() > t.dist  || (t.pts[1][1] - py).abs() > t.dist {
+                        t.pts.insert(0, [px, py]);
+                        if t.pts.len() > t.max_len {
+                            t.pts.pop();
+                        }
+                    } else {
+                        t.pts[0][0] = px;
+                        t.pts[0][1] = py;
                     }
 
                     if let Some(mut d) = self.c_drawable.get_mut(&id) {
@@ -706,6 +1364,7 @@ impl State {
             }
         }
     }
+
     fn s_predict(&mut self, ctx: &mut Context, dt: f64) {
         // for each dyn object for each gravity object in range
         for (id, p) in &mut self.c_predictable {
@@ -758,15 +1417,17 @@ impl State {
                         fy += fvy * p.tstep;
 
                         if p.collidable {
+                            let cobj = self.c_collides.get(&p.objid).unwrap();
                             // check for collision
-                            for (cid, col) in &self.c_collidable {
+                            for (cid, col) in &self.c_collider {
                                 if !col.stop_col {
                                     continue
                                 }
                                 let cpos = &self.c_pos.get(cid).unwrap();
                                 let dcx = fx - cpos.x;
                                 let dcy = fy - cpos.y;
-                                if col.rad2 >= (dcx * dcx) + (dcy * dcy) {
+                                let rdist = col.rad + cobj.rad;
+                                if (rdist * rdist) >= (dcx * dcx) + (dcy * dcy) {
                                     hit_something = true;
                                 }
                             }
@@ -775,7 +1436,7 @@ impl State {
 
                     // if we have an assoicated CDrawable, update the mesh based on the points
                     if let Some(mut d) = self.c_drawable.get_mut(&id) {
-                        d.thing = gen_fading_path(ctx, &p.pts[..p.valid_len], 1.0/self.cam.s, 0.6);
+                        d.thing = gen_fading_path(ctx, &p.pts[..p.valid_len], PRED_SIZE/self.cam.s, p.color);
                     }
                 },
                 None => {
@@ -792,6 +1453,7 @@ impl State {
     }
 
     fn s_move(&mut self, _ctx: &mut Context, dt: f64) {
+        
         // for each dyn object for each gravity object in range
         for (id, d) in &mut self.c_dynamic {
             let p = &self.c_pos[id];
@@ -813,23 +1475,55 @@ impl State {
 
             // do rotational vel to the rotation as well
             //TODO
-            
-            // check position against collidables
+        }
+    }
+
+    fn s_collision(&mut self, ctx: &mut Context, _dt: f64) {
+        let mut qe: Vec<(f64, f64, f32)> = Vec::new();
+        for (id, cobj) in &self.c_collides {
+            // check position against colliders
             //TODO have different rates at which things check for collision?
 
             let p = &self.c_pos[id];
-            for (cid, c) in &self.c_collidable {
+            for (cid, c) in &self.c_collider {
+                if *cid == *id {
+                    continue;
+                }
                 let colpos = &self.c_pos.get(cid).unwrap();
                 
                 let dx = colpos.x - p.x;
                 let dy = colpos.y - p.y;
+                let rdist = c.rad + cobj.rad;
 
-                if c.rad2 >= ((dx * dx) + (dy * dy)) {
+                if (rdist * rdist) >= ((dx * dx) + (dy * dy)) {
                     // collided
                     match c.col_action {
-                        CollisionType::Explosion(sz) => {
-                            //TODO spawn explosion
+                        CollisionType::Explosion(sz, delself) => {
+                            // queue spawn explosion
+                            let mut otherdie = false;
+                            // if the other collides had a collider
+                            // check if it wants an explosion as well
+                            if let Some(other_col) = self.c_collider.get(id) {
+                                if let CollisionType::Explosion(othersz, ds) = other_col.col_action {
+                                    if ds { // if the otherone wanted to go out on a hit, it wants to explode
+                                        qe.push((p.x, p.y, othersz));
+                                        otherdie = true;
+                                    }
+                                }
+                            }
+
+                            if !otherdie || delself {
+                                if delself {
+                                    qe.push((colpos.x, colpos.y, sz));
+                                } else {
+                                    qe.push((p.x, p.y, sz));
+                                }
+                            }
+                            
                             for e in &mut self.entities {
+                                if delself && e.id == *cid {
+                                    e.to_destroy = true;
+                                }
                                 if e.id == *id {
                                     e.to_destroy = true;
                                     break;
@@ -846,27 +1540,51 @@ impl State {
                                     }
                                 }
                             }
-                        }
+                        },
+                        CollisionType::Portal => {
+                            if let Some(_) = &self.c_ship.get_mut(id) {
+                                self.finished = true;
+                            }
+                        },
+                        CollisionType::None => (),
                     }
 
                     break;
                 }
             }
         }
+        for (px, py, sz) in qe {
+            self.spawn_explosion(ctx, px, py, sz, true);
+        }
     }
 
     fn s_player(&mut self, ctx: &mut Context, dt: f64) {
         // apply inputs
         // rotate to follow mouse
-        if let Some(ref pid) = self.playerid {
-            let p = self.c_pos.get_mut(pid).unwrap();
+        let mut launch_nuke = false;
+        let mut npx = 0.0;
+        let mut npy = 0.0;
+        let mut na = 0.0;
+        let mut nxv = 0.0;
+        let mut nyv = 0.0;
 
-            // TODO use angular accelaration to rotate, don't just snap to mouse
-            // tan = o/a
+        if let Some(ref pid) = self.playerid {
+            let px;
+            let py;
+            let pa;
             let (mx, my) = self.cam.cam2world(&graphics::screen_coordinates(ctx), self.input.mx, self.input.my);
-            let dx = p.x - mx;
-            let dy = p.y - my;
-            p.a = dy.atan2(dx) as f32;
+            {
+                let p = self.c_pos.get_mut(pid).unwrap();
+                px = p.x;
+                py = p.y;
+
+                // TODO use angular accelaration to rotate, don't just snap to mouse
+                // tan = o/a
+                let dx = px - mx;
+                let dy = py - my;
+                p.a = dy.atan2(dx) as f32;
+                pa = p.a;
+            }
 
 
             // accel based on mouse
@@ -883,14 +1601,43 @@ impl State {
             };
             //TODO taper thrust by mouse position
             if self.input.rmb {
-                d.in_ax = -p.a.cos() as f64 * tamt;
-                d.in_ay = -p.a.sin() as f64 * tamt;
+                d.in_ax = -pa.cos() as f64 * tamt;
+                d.in_ay = -pa.sin() as f64 * tamt;
             }
 
             s.fuel -= (d.in_ax + d.in_ay).abs() * dt;
             if s.fuel < 0.0 {
                 s.fuel = 0.0;
             }
+
+            if self.input.lmb  && s.ammo > 0 {
+                let nd = PLAYER_NUKE_DIST;
+                let pa_x = -pa.cos() as f64;
+                let pa_y = -pa.sin() as f64;
+                npx = px + (pa_x * nd);
+                npy = py + (pa_y * nd);
+                na = pa;
+                nxv = d.x_vel + (pa_x * PLAYER_NUKE_IVEL);
+                nyv = d.y_vel + (pa_y * PLAYER_NUKE_IVEL);
+                launch_nuke = true;
+                
+                self.input.lmb = false;
+                s.ammo -= 1;
+            }
+        }
+
+        if launch_nuke {
+            self.spawn_nuke(
+                ctx,
+                npx,
+                npy,
+                na,
+                nxv,
+                nyv,
+                PLAYER_NUKE_THRUST, // thrust
+                None, // target
+                PLAYER_NUKE_SIZE, // explosion size
+            );
         }
     }
 
@@ -905,38 +1652,17 @@ impl State {
             }
         }
     }
-
-    fn s_destroy(&mut self) {
-        let mut i = 0;
-        while i < self.entities.len() {
-            let e = &self.entities[i];
-            if !e.to_destroy {
-                i += 1;
-                continue;
-            }
-
-            if let Some(pid) = self.playerid {
-                if pid == e.id {
-                    self.playerid = None;
-                }
-            }
-
-            self.c_pos.remove(&e.id);
-            self.c_grav.remove(&e.id);
-            self.c_dynamic.remove(&e.id);
-            self.c_collidable.remove(&e.id);
-            self.c_drawable.remove(&e.id);
-            self.c_predictable.remove(&e.id);
-            self.c_ship.remove(&e.id);
-
-            self.entities.remove(i);
-        }
-    }
 }
 
 impl ggez::event::EventHandler for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
-        // TODO state machine here in each of these to call only the appropriate ones
+        if self.finished {
+            self.gen_level(ctx, self.level+1);
+        } else if self.input.reset {
+            self.gen_level(ctx, 0);
+            self.input.reset = false;
+        }
+
         let dt = timer::duration_to_f64(timer::delta(ctx));
         
         if self.log_time <= timer::ticks(ctx) {
@@ -947,18 +1673,18 @@ impl ggez::event::EventHandler for State {
             println!(" - ");
         }
 
-        if self.input.reset {
-            self.gen_level(ctx);
-            self.input.reset = false;
-        }
-
         self.s_player(ctx, dt);
         self.s_move(ctx, dt);
+        self.s_collision(ctx, dt);
         self.s_predict(ctx, dt);
         self.s_trail(ctx, dt);
+        self.s_turret(ctx, dt);
+        self.s_rocket(ctx, dt);
+        self.s_explosion(ctx, dt);
 
         self.s_destroy();
-        Ok(())
+
+        return Ok(());
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
@@ -967,15 +1693,39 @@ impl ggez::event::EventHandler for State {
         let dp = graphics::DrawParam::default();
 
         graphics::clear(ctx, graphics::BLACK);
-
+        
         self.s_player_cam();
         self.cam.do_update(ctx, &sc);
 
+        if !self.started {
+            let mut ui = graphics::Text::new(GUIDE);
+
+            ui.set_font(self.font, graphics::Scale{x: 24.0, y: 24.0});
+
+            let (uidx, uidy) = ui.dimensions(ctx);
+            let (uidx, uidy) = (uidx as f32, uidy as f32);
+            let (uix, uiy) = ((sc.w - uidx)/ 2.0, (sc.h - uidy)/2.0);
+            let (uix, uiy) = self.cam.cam2world(&sc, uix * self.cam.s, uiy * self.cam.s);
+            graphics::draw(
+                ctx,
+                &ui,
+                dp.dest([uix as f32, uiy as f32]).scale([1.0 / self.cam.s, 1.0 / self.cam.s]),
+            ).unwrap();
+            graphics::present(ctx)?;
+            // yield the CPU?
+            timer::yield_now();
+            return Ok(())
+        }
+
         for (id, d) in &self.c_drawable {
             let p = &self.c_pos.get(id).expect("Drawables must have a position");
+            let mut objr = d.r;
+            if let DrawThing::MeshScale(_, ms) = d.thing {
+                objr *= ms;
+            }
 
             //don't draw objects off screen
-            if !self.cam.is_visible(ctx, &sc, p.x, p.y, d.r) {
+            if !self.cam.is_visible(ctx, &sc, p.x, p.y, objr) {
                 continue;
             }
             let item_dp = dp.dest([p.x as f32, p.y as f32]).rotation(p.a);
@@ -995,12 +1745,18 @@ impl ggez::event::EventHandler for State {
                 format!(
                     concat!(
                         "/---------------\\\n",
-                        "|  fuel : {:04.0}  |\n",
-                        "|  zone : {:02}    |\n",
-                        "|  vel  : {:04.0}  |\n",
+                        "|   fuel : {:04.0}   |\n",
+                        "|   zone : {:02}     |\n",
+                        "|    vel : {:04.0}   |\n",
+                        "|  nukes : {:02}     |\n",
+                        "|  locks : {:02}     |\n",
                         "\\---------------/\n", 
                     ),
-                    s.fuel, self.level, ((d.x_vel * d.x_vel) + (d.y_vel * d.y_vel)).sqrt(),
+                    s.fuel,
+                    self.level,
+                    ((d.x_vel * d.x_vel) + (d.y_vel * d.y_vel)).sqrt(),
+                    s.ammo,
+                    self.locks.len(),
                 ),
             );
 
@@ -1138,7 +1894,7 @@ impl ggez::event::EventHandler for State {
     }
 }
 
-fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, start_c: f32) -> DrawThing {
+fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, color: [f32;4]) -> DrawThing {
     if pts.len() < 3 {
         return DrawThing::Blank;
     }
@@ -1151,18 +1907,20 @@ fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, start_c: f32) ->
 
     let almost_last = pts.len()-1;
     for i in 0..almost_last {
-        let c = start_c * (((pts.len() - i) as f32) / (pts.len() as f32));
+        let c = ((pts.len() - i) as f32) / (pts.len() as f32);
+        let mut clr = color;
+        clr[3] *= c;
 
         // how to place points with width
         let mut v1 = graphics::Vertex{
             pos: current_point,
             uv: [0.0, 0.0],
-            color: [c; 4],
+            color: clr,
         };
         let mut v2 = graphics::Vertex{
             pos: current_point,
             uv: [0.0, 0.0],
-            color: [c; 4],
+            color: clr,
         };
 
         future_point = pts[i+1];
@@ -1194,9 +1952,6 @@ fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, start_c: f32) ->
         inds.push((i*2)+3);
     }
 
-    verts[0].color = [0.0; 4];
-    verts[1].color = [0.0; 4];
-
     verts.push(graphics::Vertex{
         pos: future_point,
         uv: [0.0, 0.0],
@@ -1215,20 +1970,9 @@ fn gen_fading_path(ctx: &mut Context, pts: &[[f32; 2]], s: f32, start_c: f32) ->
         None,
     );
     return DrawThing::Mesh(tm.unwrap());
-
-    /*let tm = graphics::Mesh::new_line(
-        ctx,
-        pts,
-        s,
-        graphics::WHITE,
-    );
-    return match tm {
-        Ok(m) => DrawThing::Mesh(m),
-        _ => DrawThing::Blank,
-    };*/
 }
 
-fn load_mesh(ctx: &mut Context, p: &str, scale: f32) -> (graphics::Mesh, f32) {
+fn load_mesh(ctx: &mut Context, p: &str, scale: f32, color: [f32; 4]) -> (graphics::Mesh, f32) {
     let f = filesystem::open(ctx, std::path::Path::new(p)).expect("Unable to find mesh file");
 
     let f = BufReader::new(f);
@@ -1259,7 +2003,7 @@ fn load_mesh(ctx: &mut Context, p: &str, scale: f32) -> (graphics::Mesh, f32) {
                     let v = graphics::Vertex{
                         pos: [x, -y],
                         uv: [0.0, 0.0],
-                        color: [1.0; 4],
+                        color: color,
                     };
 
                     verts.push(v);
@@ -1344,7 +2088,6 @@ pub fn main() {
     let mut state = State::new(ctx).unwrap();
 
     // generate a map
-    state.gen_level(ctx);
 
     event::run(ctx, event_loop, &mut state).unwrap();
 
