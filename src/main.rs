@@ -47,7 +47,7 @@ const PRED_RATE: f64 = 0.0;
 const PRED_TSTEP: f64 = 0.27;
 const PRED_AMT: usize = 45;
 const TRAIL_DIST: f32 = 30.0;
-const TURRET_FIRE_RATE: f64 = 3.0;
+const TURRET_FIRE_RATE: f64 = 2.1;
 const TURRET_UPDATE_RATE: f64 = 1.0;
 const TURRET_NUKE_THRUST: f64 = 180.0;
 const TURRET_NUKE_SIZE: f32 = 270.0;
@@ -331,8 +331,8 @@ struct State {
     font: graphics::Font,
 
     //DEBUG
-    log_time: usize,
-    grav_count: usize,
+    //log_time: usize,
+    //grav_count: usize,
 }
 
 impl State {
@@ -366,8 +366,8 @@ impl State {
             font: graphics::Font::new(ctx, "\\NovaMono-Regular.ttf").unwrap(),
 
             //DEBUG
-            log_time: 0,
-            grav_count: 0,
+            //log_time: 0,
+            //grav_count: 0,
 
             input: InputState{
                 up: false,
@@ -1458,8 +1458,8 @@ impl State {
         for (id, d) in &mut self.c_dynamic {
             let p = &self.c_pos[id];
 
-            let (mut ax, mut ay, count) = State::get_grav_a(&self.c_grav, &self.c_pos, p.x, p.y, id);
-            self.grav_count = count;
+            let (mut ax, mut ay, _) = State::get_grav_a(&self.c_grav, &self.c_pos, p.x, p.y, id);
+            //self.grav_count = count;
             ax += d.in_ax;
             ay += d.in_ay;
 
@@ -1665,13 +1665,13 @@ impl ggez::event::EventHandler for State {
 
         let dt = timer::duration_to_f64(timer::delta(ctx));
         
-        if self.log_time <= timer::ticks(ctx) {
-            self.log_time = timer::ticks(ctx) + LOG_TICKS;
-            println!("fps: {}", timer::fps(ctx));
-            println!("scale: {}", self.cam.s);
-            println!("grav_count: {}", self.grav_count);
-            println!(" - ");
-        }
+        //if self.log_time <= timer::ticks(ctx) {
+        //    self.log_time = timer::ticks(ctx) + LOG_TICKS;
+        //    println!("fps: {}", timer::fps(ctx));
+        //    println!("scale: {}", self.cam.s);
+        //    println!("grav_count: {}", self.grav_count);
+        //    println!(" - ");
+        //}
 
         self.s_player(ctx, dt);
         self.s_move(ctx, dt);
@@ -1744,13 +1744,13 @@ impl ggez::event::EventHandler for State {
             let mut ui = graphics::Text::new(
                 format!(
                     concat!(
-                        "/---------------\\\n",
+                        "/-----------------\\\n",
                         "|   fuel : {:04.0}   |\n",
                         "|   zone : {:02}     |\n",
                         "|    vel : {:04.0}   |\n",
                         "|  nukes : {:02}     |\n",
                         "|  locks : {:02}     |\n",
-                        "\\---------------/\n", 
+                        "\\-----------------/\n", 
                     ),
                     s.fuel,
                     self.level,
@@ -2072,7 +2072,8 @@ pub fn main() {
     
     let (ref mut ctx, ref mut event_loop) = cb.build().unwrap();
 
-    graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
+    //graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
+    graphics::set_default_filter(ctx, graphics::FilterMode::Linear);
 
     graphics::set_mode(ctx, conf::WindowMode {
         width: 1200.0, height: 900.0,
