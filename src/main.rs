@@ -26,7 +26,7 @@ const FUEL_PER_PUP: f64 = 450.0;
 const SHIP_MINSZ: f32 = 1.0;    // minimun scale factor it will get to
 const GRAV_REACH: f64 = 0.45;    // minimum pull before out of range
 const MAX_CAM_SCALE: f32 = 90.0;
-const MIN_CAM_SCALE: f32 = 0.21;
+const MIN_CAM_SCALE: f32 = 0.201;
 const ZOOM_AMT: f32 = 0.06;
 const LOG_TICKS: usize = 81;
 const PLAYER_THRUST: f64 = 69.0;
@@ -47,8 +47,8 @@ const PRED_RATE: f64 = 0.0;
 const PRED_TSTEP: f64 = 0.27;
 const PRED_AMT: usize = 45;
 const TRAIL_DIST: f32 = 30.0;
-const TURRET_FIRE_RATE: f64 = 2.1;
-const TURRET_UPDATE_RATE: f64 = 1.0;
+const TURRET_FIRE_RATE: f64 = 1.8;
+const TURRET_UPDATE_RATE: f64 = 0.45;
 const TURRET_NUKE_THRUST: f64 = 180.0;
 const TURRET_NUKE_SIZE: f32 = 270.0;
 const TURRET_NUKE_DIST: f64 = 60.0;
@@ -70,6 +70,7 @@ const GUIDE: &str = concat!(
     "--(   )--  = Open portal to Next Zone\n",
     "  / | \\\n",
     "\n",
+    "       Zoom in/out with the scroll wheel\n",
     "       Press R to Start / Restart\n",
 );
 
@@ -357,7 +358,7 @@ impl State {
             cam: Camera{
                 x: 0.0,
                 y: 0.0,
-                s: 1.0,
+                s: MIN_CAM_SCALE,
                 update: true,
             },
 
@@ -1271,6 +1272,7 @@ impl State {
                     *sc = r as f32;
                 }
                 r *= ex.grow_size as f64;
+                d.r = r as f32;
                 if let Some(c) = &mut self.c_collider.get_mut(id) {
                     c.rad = r;
                 }
@@ -1283,6 +1285,7 @@ impl State {
                     *sc = r as f32;
                 }
                 r *= ex.grow_size as f64;
+                d.r = r as f32;
                 if let Some(c) = &mut self.c_collider.get_mut(id) {
                     c.rad = r;
                 }
